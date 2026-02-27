@@ -95,9 +95,9 @@ function updateUI(data) {
             smokeEl.style.cssText = 'color: #000; font-size: 4em; font-weight: bold;';
         } else {
             smokeEl.textContent = smokeVal;
-            if (isSmoke || smokeVal > 140) {
+            if (isSmoke || smokeVal > 700) {
                 smokeEl.style.cssText = 'color: #CC0000; font-size: 4em; font-weight: bold; animation: pulse 1s infinite;';
-            } else if (smokeVal > 80) {
+            } else if (smokeVal > 500) {
                 smokeEl.style.cssText = 'color: #CC6600; font-size: 4em; font-weight: bold;';
             } else {
                 smokeEl.style.cssText = 'color: #006600; font-size: 4em; font-weight: bold;';
@@ -114,13 +114,13 @@ function updateUI(data) {
             meterText.textContent = 'OFFLINE';
             meterText.style.color = '#000';
         } else {
-            const pct = Math.min((smokeVal / 400) * 100, 100);
+            const pct = Math.min((smokeVal / 1500) * 100, 100);
             meterEl.style.width = pct + '%';
             
-            if (isSmoke || smokeVal > 140) {
+            if (isSmoke || smokeVal > 700) {
                 meterEl.style.background = '#CC0000';
                 meterText.textContent = 'HIGH';
-            } else if (smokeVal > 80) {
+            } else if (smokeVal > 500) {
                 meterEl.style.background = '#CC6600';
                 meterText.textContent = 'MEDIUM';
             } else {
