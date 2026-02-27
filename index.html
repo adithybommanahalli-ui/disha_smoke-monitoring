@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Disha Smoke Monitoring Dashboard</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#6b1f1f">
+</head>
+<body>
+<script>
+  if (localStorage.getItem("gmu_auth") !== "true") {
+    window.location.href = "login.html";
+  }
+</script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<header class="top-header">
+  <div class="header-left">
+    <a href="https://gmu.ac.in/" target="_blank">
+      <img src="assets/image.png" alt="disha Logo" class="header-logo">
+    </a>
+  </div>
+  <div class="header-title">
+    <h1>Smoke Monitoring System</h1>
+    <p>Disha International School </p>
+  </div>
+  <div class="header-right">
+    <a href="https://github.com/adithybommanahalli-ui/gmu-smoke-app" target="_blank">
+      <img src="https://cdn-icons-png.flaticon.com/512/25/25231.png" alt="GitHub" class="header-icon">
+    </a>
+  </div>
+</header>
+<main class="dashboard dashboard-top">
+  <div class="card">
+    <h2>Smoke Level</h2>
+    <div class="value" id="smokeValue">0</div>
+    <div class="meter">
+      <div class="meter-fill" id="smokeMeter"></div>
+    </div>
+    <p class="meter-label">
+      Intensity: <span id="meterText">--</span>
+    </p>
+    <p class="last-updated" id="lastUpdated">Last updated: --</p>
+  </div>
+  
+  <div class="card actions">
+    <h2>Buzzer Control</h2>
+    <button id="muteBtn" onclick="muteBuzzer()" style="margin-bottom:12px;">
+      Mute Buzzer
+    </button>
+    <button id="enableBtn" onclick="enableBuzzer()" style="background:#22c55e;color:white;">
+      Reset / Enable Buzzer
+    </button>
+    <p id="systemStatus" style="margin-top:15px;font-size:14px;color:#22c55e;">✅ System Online</p>
+  </div>
+
+  <div class="card" style="grid-column:1/-1">
+    <h2>Recent Events</h2>
+    <div style="overflow-x:auto">
+      <table id="historyTable" style="width:100%;margin-top:12px;border-collapse:collapse;">
+        <thead>
+          <tr style="background:rgba(255,255,255,0.08)">
+            <th>ID</th>
+            <th>Smoke</th>
+            <th>Status</th>
+            <th>Date</th>
+            <th>Time</th>
+            <th>WiFi</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div> 
+</main>
+<footer class="footer">
+  <div class="footer-container">
+    <div class="footer-section">
+      <h3>Smoke Monitoring System</h3>
+      <p>
+        Project Based Learning (PBL) on Internet of Things (IoT),
+        developed under the Department of Computer Science &
+        Engineering, GM University.
+      </p>
+    </div>
+   <div class="footer-section">
+ 
+  
+<div style="margin-bottom: 20px;"></div>
+  <p class="sub-heading"><b>Team Members</b></p>
+  <div class="person-list">
+    <div class="person-row">
+      <span class="person-left">Malatesh B</span>
+      <span class="person-right" style="font-size: 12px; color: #cd1717;">8<sup>th</sup>Alpha 007</span>
+    </div>
+    <div class="person-row">
+      <span class="person-left">Naveen K</span>
+      <span class="person-right" style="font-size: 12px; color: #cd1717;">8<sup>th</sup>Alpha 016</span>
+    </div>
+   
+  </div>
+</div>
+    <div class="footer-section contact-section">
+      <h3>Contact</h3>
+      <p>
+        Email:
+       <a href="https://mail.google.com/mail/?view=cm&fs=1&to=iotsmokedetector@gmail.com" target="_blank"> iotsmokedetector@gmail.com </a>
+      </p>
+      <p>Phone: +91</p>
+      <p>
+        Website:
+        <a href="https://gmu.ac.in" target="_blank">
+          www.gmu.ac.in
+        </a>
+      </p>
+    </div>
+  </div>
+  <div class="footer-bottom">
+    © Disha International School · IoT Smoke Detection System
+  </div>
+</footer>
+<script src="app.js"></script>
+<script>
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("service-worker.js")
+      .then(() => console.log("Service Worker Registered"))
+      .catch(err => console.error("SW error:", err));
+  }
+</script>
+</body>
+</html>
