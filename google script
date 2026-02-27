@@ -1,398 +1,432 @@
-#include <ESP8266WiFi.h>
-#include <ESP8266HTTPClient.h>
-#include <WiFiClientSecure.h>
 
-// ================= CONFIGURATION =================
-const char* GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzhWXahTqmv-MANVuLSM4ij7qNhv5GlfBsZy8CpQK8YBX9_RhbxCe9pvULsZFoqZo3aJA/exec";
 
-#define MQ2_SENSOR_PIN A0
-#define BUZZER_PIN D5
-
-const int BASE_THRESHOLD = 200;
-const int HYSTERESIS = 1;  // Prevent flickering at threshold
-
-// WiFi Networks (Will auto-connect to strongest signal)
-struct WiFiNetwork {
-  const char* ssid;
-  const char* password;
-  int priority;  // Higher = preferred if signal equal
-};
-
-WiFiNetwork networks[] = {
-  {"Adityab", "Aditya1167", 100},
-  {"vivo 1820", "bakasura200", 90},
-};
-const int NETWORK_COUNT = sizeof(networks) / sizeof(networks[0]);
-
-// ================= STATE VARIABLES =================
-int smokeValue = 0;
-int lastLoggedValue = -1;
-bool smokeDetected = false;          // Current physical smoke state (updated every loop)
-bool lastSmokeStatus = false;        // Last state that was successfully sent
-bool buzzerEnabled = true;
-bool systemOnline = false;
-String deviceId = "";
-String currentSSID = "";
-String lastError = "";
-
-// Timing
-unsigned long lastSendTime = 0;
-unsigned long lastCommandCheck = 0;
-unsigned long lastSuccessfulSend = 0;
-unsigned long wifiReconnectTime = 0;
-
-// Intervals
-const unsigned long MIN_SEND_INTERVAL = 3000;      // 3 sec between events
-const unsigned long COMMAND_INTERVAL = 5000;       // 5 sec command check
-const unsigned long HEARTBEAT_INTERVAL = 25000;    // 25 sec heartbeat (keep alive)
-const unsigned long AUTO_RESET_DELAY = 30000;      // 30 sec auto-reset buzzer
-const unsigned long OFFLINE_TIMEOUT = 35000;       // Mark offline if no send for 35 sec
-
-// Event tracking
-String lastEventReason = "BOOT";
-int eventCounter = 0;
-
-// New: pending event that should be sent as soon as WiFi is available
-String pendingEventReason = "";
-
-// ================= SETUP =================
-void setup() {
-  Serial.begin(115200);
-  delay(1000);
-  
-  pinMode(BUZZER_PIN, OUTPUT);
-  digitalWrite(BUZZER_PIN, LOW);
-  
-  
-  WiFi.persistent(false);
-  WiFi.setAutoReconnect(false);
-  
-  deviceId = String(ESP.getChipId(), HEX);
-  deviceId.toUpperCase();
-  Serial.printf("[INIT] Device ID: %s\n", deviceId.c_str());
-  Serial.printf("[INIT] Threshold: %d\n", BASE_THRESHOLD);
-  Serial.printf("[INIT] Networks configured: %d\n", NETWORK_COUNT);
-  
-  connectToBestWiFi();
-  
-  Serial.println("========================================\n");
-  
-  // Initial data send
-  if (systemOnline) {
-    sendDataToGoogle("SYSTEM_BOOT", true);
+function doGet(e) {
+  const lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(10000);
+    return handleRequest(e);
+  } catch (error) {
+    console.error("Lock error:", error);
+    return createTextResponse("Server busy");
+  } finally {
+    lock.releaseLock();
   }
 }
 
-// ================= MAIN LOOP =================
-void loop() {
-  unsigned long now = millis();
-  
-  // 1. Always read sensor and update smoke state (buzzer controlled here)
-  smokeValue = readSmokeSensor();
-  updateSmokeState(now);
-  
-  // 2. WiFi management (attempt reconnect if needed)
-  if (WiFi.status() != WL_CONNECTED) {
-    if (systemOnline) {
-      systemOnline = false;
-      Serial.println("[WIFI] ⚠️ CONNECTION LOST");
-    }
-    if (now - wifiReconnectTime > 10000) {  // Try reconnect every 10 sec
-      wifiReconnectTime = now;
-      connectToBestWiFi();
-    }
-  } else {
-    if (!systemOnline) {
-      systemOnline = true;
-      currentSSID = WiFi.SSID();
-      Serial.printf("[WIFI] ✅ RECONNECTED: %s (RSSI: %d dBm)\n", 
-                    currentSSID.c_str(), WiFi.RSSI());
-    }
-  }
-  
-  // 3. WiFi‑dependent tasks (only when online)
-  if (systemOnline) {
-    processEventSending(now);   // Check for events that need to be sent
-    checkCommands(now);         // Retrieve commands from dashboard
+function doPost(e) {
+  return doGet(e);
+}
+
+function handleRequest(e) {
+  try {
+    const params = e?.parameter || {};
+    const action = params.action || "";
     
-    // Heartbeat (keep‑alive)
-    if (now - lastSuccessfulSend > HEARTBEAT_INTERVAL) {
-      Serial.println("[HEARTBEAT] Sending keep-alive...");
-      if (sendDataToGoogle("HEARTBEAT", false)) {
-        lastSuccessfulSend = now;
-      }
-    }
-  }
-  
-  delay(50);  // Small delay for stability
-}
-
-// ================= SENSOR READING =================
-int readSmokeSensor() {
-  // Take 3 samples and average
-  int sum = 0;
-  for (int i = 0; i < 3; i++) {
-    sum += analogRead(MQ2_SENSOR_PIN);
-    delay(5);
-  }
-  int avg = sum / 3;
-  
-  static unsigned long lastPrint = 0;
-  if (millis() - lastPrint > 2000) {
-    Serial.printf("[SENSOR] Value: %d | Status: %s | Buzzer: %s\n", 
-                  avg, 
-                  smokeDetected ? "SMOKE" : "CLEAR",
-                  buzzerEnabled ? "ON" : "MUTED");
-    lastPrint = millis();
-  }
-  return avg;
-}
-
-// ================= UPDATE SMOKE STATE AND BUZZER (ALWAYS RUNS) =================
-void updateSmokeState(unsigned long now) {
-  // Apply hysteresis to prevent flickering
-  bool currentSmoke;
-  if (smokeDetected) {
-    currentSmoke = smokeValue > (BASE_THRESHOLD - HYSTERESIS);
-  } else {
-    currentSmoke = smokeValue > (BASE_THRESHOLD + HYSTERESIS);
-  }
-
-  // Update the physical smoke flag
-  smokeDetected = currentSmoke;
-
-  // Control buzzer – independent of WiFi
-  if (smokeDetected && buzzerEnabled) {
-    digitalWrite(BUZZER_PIN, HIGH);
-  } else {
-    digitalWrite(BUZZER_PIN, LOW);
-  }
-
-  // Auto‑reset buzzer after smoke clears (if it was muted during smoke)
-  static unsigned long smokeClearedTime = 0;
-  if (!smokeDetected && !buzzerEnabled) {
-    if (smokeClearedTime == 0) smokeClearedTime = now;
-    if (now - smokeClearedTime > AUTO_RESET_DELAY) {
-      buzzerEnabled = true;
-      smokeClearedTime = 0;
-      Serial.println("🔔 AUTO-RESET: Buzzer re-enabled");
-      // Mark that we need to send an AUTO_RESET event (will be sent when online)
-      pendingEventReason = "AUTO_RESET";
-    }
-  } else {
-    smokeClearedTime = 0;
-  }
-}
-
-// ================= PROCESS EVENT SENDING (ONLINE ONLY) =================
-void processEventSending(unsigned long now) {
-  String reason = "";
-  bool shouldSend = false;
-  bool shouldLog = true;   // Always log real events (not heartbeats)
-  
-  // 1. Smoke start or end (compare with last successfully sent state)
-  if (smokeDetected != lastSmokeStatus) {
-    shouldSend = true;
-    reason = smokeDetected ? "SMOKE_START" : "SMOKE_END";
-    Serial.printf("\n🚨 EVENT: %s\n", reason.c_str());
-  }
-  // 2. Significant value change during smoke (at least 40 units)
-  else if (smokeDetected && abs(smokeValue - lastLoggedValue) >= 40 &&
-           (now - lastSendTime > MIN_SEND_INTERVAL)) {
-    shouldSend = true;
-    reason = "VALUE_CHANGE";
-    Serial.printf("\n📈 EVENT: Value change %d -> %d\n", lastLoggedValue, smokeValue);
-  }
-  // 3. Pending auto‑reset event (from updateSmokeState)
-  else if (pendingEventReason != "") {
-    shouldSend = true;
-    reason = pendingEventReason;
-    pendingEventReason = "";   // Clear after taking
-  }
-  
-  if (shouldSend) {
-    if (sendDataToGoogle(reason, shouldLog)) {
-      lastSendTime = now;
-      lastSuccessfulSend = now;
-      lastLoggedValue = smokeValue;
-      lastSmokeStatus = smokeDetected;   // Update sent status only on success
-      eventCounter++;
-      Serial.printf("[TX] ✅ Success: %s (Event #%d)\n", reason.c_str(), eventCounter);
-    } else {
-      Serial.printf("[TX] ❌ Failed: %s\n", reason.c_str());
-      // If send fails, we do NOT update lastSmokeStatus or lastLoggedValue,
-      // so the event will be retried on the next online loop.
-    }
-  }
-}
-
-// ================= WIFI MANAGEMENT (RSSI-based) =================
-void connectToBestWiFi() {
-  Serial.println("\n[WIFI] Scanning for best network...");
-  WiFi.mode(WIFI_STA);
-  WiFi.disconnect();
-  delay(100);
-  
-  // Scan networks
-  int n = WiFi.scanNetworks();
-  if (n == 0) {
-    Serial.println("[WIFI] ❌ No networks found");
-    return;
-  }
-  
-  Serial.printf("[WIFI] Found %d networks\n", n);
-  
-  // Find best configured network by RSSI
-  int bestIndex = -1;
-  int bestRSSI = -1000;
-  int bestPriority = -1;
-  
-  for (int i = 0; i < n; i++) {
-    String ssid = WiFi.SSID(i);
-    int rssi = WiFi.RSSI(i);
-    
-    Serial.printf("       [%d] %s (%d dBm)\n", i, ssid.c_str(), rssi);
-    
-    // Check if this SSID is in our configured list
-    for (int j = 0; j < NETWORK_COUNT; j++) {
-      if (ssid.equals(networks[j].ssid)) {
-        // Prefer higher RSSI, but consider priority if close
-        if (rssi > bestRSSI + 5 || (rssi > bestRSSI - 5 && networks[j].priority > bestPriority)) {
-          bestRSSI = rssi;
-          bestIndex = j;
-          bestPriority = networks[j].priority;
+    switch(action) {
+      case "latest":
+        return handleLatestRequest();
+      case "history":
+        return handleHistoryRequest();
+      case "getCommand":
+        return handleGetCommand(params.device);
+      case "command":
+        return handleCommand(params.buzzer, params.source, params.device);
+      case "health":
+        return handleHealthCheck();
+      default:
+        if (params.smoke_value !== undefined) {
+          return handleSensorData(params);
         }
-      }
+        return createTextResponse("GMU Smoke System v5.1");
     }
+  } catch (error) {
+    console.error("HandleRequest Error:", error);
+    return createErrorResponse(error.message);
   }
+}
+
+/* ================= HANDLE SENSOR DATA (DEDUP LOGIC) ================= */
+function handleSensorData(params) {
+  const props = PropertiesService.getScriptProperties();
+  const serverNow = Date.now();
   
-  if (bestIndex >= 0) {
-    Serial.printf("[WIFI] Connecting to: %s (%d dBm, Priority: %d)...\n", 
-                  networks[bestIndex].ssid, bestRSSI, bestPriority);
+  // Parse parameters
+  const smoke = parseInt(params.smoke_value) || 0;
+  const status = parseInt(params.status) || 0;
+  const wifi = params.wifi || "Unknown";
+  const reason = params.reason || "DATA";
+  const buzzer = params.buzzer || "1";
+  const deviceId = params.device || "UNKNOWN";
+  
+  // Format time for storage
+  const now = new Date();
+  const dateStr = Utilities.formatDate(now, "Asia/Kolkata", "dd-MM-yyyy");
+  const timeStr = Utilities.formatDate(now, "Asia/Kolkata", "HH:mm:ss");
+  
+  // CRITICAL: Construct event signature (Rule 3)
+  const eventKey = `${smoke}_${status}_${reason}`;
+  let shouldAppendToSheet = false;
+  
+  // Rule 2 & 4: Server-side deduplication logic
+  if (reason === "HEARTBEAT") {
+    // Heartbeats update properties but NEVER log to sheet
+    console.log(`[${deviceId}] Heartbeat received (not logged to sheet)`);
+    shouldAppendToSheet = false;
+  } else {
+    const lastKey = props.getProperty("LAST_EVENT_KEY");
+    const lastTime = parseInt(props.getProperty("LAST_EVENT_TIME") || "0");
     
-    WiFi.begin(networks[bestIndex].ssid, networks[bestIndex].password);
-    
-    int attempts = 0;
-    while (WiFi.status() != WL_CONNECTED && attempts < 30) {
-      delay(500);
-      Serial.print(".");
-      attempts++;
-    }
-    
-    if (WiFi.status() == WL_CONNECTED) {
-      currentSSID = networks[bestIndex].ssid;
-      systemOnline = true;
-      Serial.printf("\n[WIFI] ✅ CONNECTED\n");
-      Serial.printf("       IP: %s\n", WiFi.localIP().toString().c_str());
-      Serial.printf("       RSSI: %d dBm\n", WiFi.RSSI());
-      return;
+    // Rule 4: Check if same event within 10 seconds
+    if (lastKey === eventKey && (serverNow - lastTime) < 10000) {
+      console.log(`[${deviceId}] DUPLICATE BLOCKED: ${eventKey} (${serverNow - lastTime}ms ago)`);
+      shouldAppendToSheet = false;
     } else {
-      Serial.println("\n[WIFI] ❌ Connection failed");
+      console.log(`[${deviceId}] NEW EVENT: ${eventKey}`);
+      shouldAppendToSheet = true;
+      
+      // Update dedup tracking (Rule 3)
+      props.setProperty("LAST_EVENT_KEY", eventKey);
+      props.setProperty("LAST_EVENT_TIME", serverNow.toString());
     }
-  } else {
-    Serial.println("[WIFI] ❌ No configured networks found");
   }
   
-  systemOnline = false;
-  currentSSID = "";
+  // Rule 7: Always update live properties (even if duplicate)
+  props.setProperties({
+    "LATEST_SMOKE": smoke.toString(),
+    "LATEST_STATUS": status.toString(),
+    "LATEST_DATE": dateStr,
+    "LATEST_TIME": timeStr,
+    "LAST_UPDATE": serverNow.toString(),
+    "DEVICE_ONLINE": "true",
+    "DEVICE_WIFI": wifi,
+    "DEVICE_ID": deviceId,
+    "LATEST_BUZZER": buzzer,
+    "LATEST_REASON": reason
+  });
+  
+  // Handle email alerts (FIXED: Pass date, time, wifi)
+  if (shouldAppendToSheet) {
+    handleSmokeAlert(smoke, status, dateStr, timeStr, wifi, props);
+  }
+  
+  // Rule 6 & 7: Append only if not duplicate, but return OK regardless
+  if (shouldAppendToSheet) {
+    appendToSheet(smoke, status, dateStr, timeStr, wifi, deviceId, reason, serverNow);
+  }
+  
+  return createTextResponse("OK");
 }
 
-// ================= COMMANDS FROM DASHBOARD =================
-void checkCommands(unsigned long now) {
-  if (now - lastCommandCheck < COMMAND_INTERVAL) return;
-  lastCommandCheck = now;
-  
-  Serial.println("[CMD] Checking for commands...");
-  
-  WiFiClientSecure client;
-  HTTPClient http;
-  client.setInsecure();
-  
-  String url = String(GOOGLE_SCRIPT_URL);
-  url += "?action=getCommand&device=" + deviceId;
-  url += "&rssi=" + String(WiFi.RSSI());
-  
-  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-  http.begin(client, url);
-  http.setTimeout(3000);
-  
-  int httpCode = http.GET();
-  if (httpCode == 200) {
-    String resp = http.getString();
-    Serial.printf("[CMD] Response: %s\n", resp.c_str());
+/* ================= LOG TO SHEET WITH SEQUENTIAL IDS ================= */
+function appendToSheet(smoke, status, date, time, wifi, deviceId, reason, timestamp) {
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    let sheet = ss.getSheetByName("Logs");
     
-    // Parse JSON response
-    if (resp.indexOf("\"buzzer\":\"0\"") >= 0 && buzzerEnabled) {
-      buzzerEnabled = false;
-      digitalWrite(BUZZER_PIN, LOW);
-      Serial.println("[CMD] 🔕 Buzzer MUTED by dashboard");
-      sendDataToGoogle("CMD_MUTE", true);
+    if (!sheet) {
+      // Initialize with sequential counter
+      sheet = ss.insertSheet("Logs");
+      sheet.appendRow(["ID", "Smoke", "Status", "Date", "Time", "WiFi", "Device", "Reason", "ServerTime"]);
+      sheet.getRange(1, 1, 1, 9).setFontWeight("bold").setBackground("#4285f4").setFontColor("white");
     }
-    else if (resp.indexOf("\"buzzer\":\"1\"") >= 0 && !buzzerEnabled) {
-      buzzerEnabled = true;
-      Serial.println("[CMD] 🔔 Buzzer ENABLED by dashboard");
-      sendDataToGoogle("CMD_ENABLE", true);
+    
+    // Get next sequential ID from Properties (atomic within lock)
+    const props = PropertiesService.getScriptProperties();
+    let nextId = parseInt(props.getProperty("NEXT_ID") || "1");
+    
+    // Append row with simple number
+    sheet.appendRow([nextId, smoke, status, date, time, wifi, deviceId, reason, timestamp]);
+    console.log(`[SHEET] Logged ID=${nextId}: ${reason} | ${deviceId} | Smoke:${smoke}`);
+    
+    // Increment for next time
+    props.setProperty("NEXT_ID", (nextId + 1).toString());
+    
+    // Maintenance: Keep last 500 events
+    const lastRow = sheet.getLastRow();
+    if (lastRow > 501) {
+      sheet.deleteRows(2, lastRow - 501);
     }
-    else if (resp.indexOf("\"ping\":\"1\"") >= 0) {
-      Serial.println("[CMD] Ping received");
-    }
-  } else {
-    Serial.printf("[CMD] ❌ HTTP Error: %d\n", httpCode);
-  }
-  http.end();
-}
-
-// ================= DATA TRANSMISSION =================
-bool sendDataToGoogle(String reason, bool logToSheet) {
-  WiFiClientSecure client;
-  HTTPClient http;
-  client.setInsecure();
-  
-  String url = String(GOOGLE_SCRIPT_URL);
-  url += "?smoke_value=" + String(smokeValue);
-  url += "&status=" + String(smokeDetected ? 1 : 0);
-  url += "&wifi=" + urlEncode(currentSSID);
-  url += "&device=" + deviceId;
-  url += "&reason=" + urlEncode(reason);
-  url += "&buzzer=" + String(buzzerEnabled ? 1 : 0);
-  url += "&log=" + String(logToSheet ? "1" : "0");  // Tell GAS whether to log
-  url += "&rssi=" + String(WiFi.RSSI());
-  
-  Serial.printf("[TX] Sending: %s (Log:%s) | Smoke:%d | ", 
-                reason.c_str(), 
-                logToSheet ? "YES" : "NO",
-                smokeValue);
-  
-  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-  http.begin(client, url);
-  http.setTimeout(5000);
-  
-  int httpCode = http.GET();
-  String resp = http.getString();
-  http.end();
-  
-  if (httpCode == 200) {
-    Serial.println("OK");
-    if (resp.indexOf("DUPLICATE") >= 0) {
-      Serial.println("[TX] Duplicate prevented by server");
-    }
-    return true;
-  } else {
-    Serial.printf("FAIL(%d)\n", httpCode);
-    return false;
+    
+  } catch (error) {
+    console.error("Sheet append error:", error);
   }
 }
 
-// ================= UTILITIES =================
-String urlEncode(String str) {
-  String out = "";
-  for (unsigned int i = 0; i < str.length(); i++) {
-    char c = str.charAt(i);
-    if (c == ' ') out += "%20";
-    else if (c == '&') out += "%26";
-    else if (c == '=') out += "%3D";
-    else if (c == '?') out += "%3F";
-    else out += c;
+/* ================= LATEST REQUEST ================= */
+function handleLatestRequest() {
+  const props = PropertiesService.getScriptProperties();
+  const lastUpdate = parseInt(props.getProperty("LAST_UPDATE") || "0");
+  const serverNow = Date.now();
+  const secondsSince = Math.floor((serverNow - lastUpdate) / 1000);
+  
+  const isOnline = secondsSince < 35;
+  
+  return createJsonResponse({
+    smoke: props.getProperty("LATEST_SMOKE") || "0",
+    status: props.getProperty("LATEST_STATUS") || "0",
+    status_text: props.getProperty("LATEST_STATUS") === "1" ? "SMOKE DETECTED" : "CLEAR",
+    date: props.getProperty("LATEST_DATE") || "--",
+    time: props.getProperty("LATEST_TIME") || "--",
+    online: isOnline,
+    system_status: isOnline ? "online" : "offline",
+    seconds_since_update: secondsSince,
+    buzzer_state: props.getProperty("LATEST_BUZZER") || "1",
+    wifi: props.getProperty("DEVICE_WIFI") || "Unknown",
+    device: props.getProperty("DEVICE_ID") || "Unknown",
+    reason: props.getProperty("LATEST_REASON") || "none"
+  });
+}
+
+/* ================= HISTORY ================= */
+function handleHistoryRequest() {
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getSheetByName("Logs");
+    
+    if (!sheet || sheet.getLastRow() <= 1) {
+      return createJsonResponse([]);
+    }
+    
+    // Return last 100 events, newest first (no dedup needed - already handled on write)
+    const data = sheet.getDataRange().getValues();
+    data.shift(); // Remove header
+    const recentData = data.slice(-100).reverse();
+    
+    const formatted = recentData.map(row => [
+      row[0]?.toString() || "--",      // ID
+      row[1]?.toString() || "0",       // Smoke
+      row[2]?.toString() || "0",       // Status
+      row[3]?.toString() || "--",      // Date
+      row[4]?.toString() || "--",      // Time
+      row[5]?.toString() || "Unknown", // WiFi
+      row[6]?.toString() || "Unknown", // Device
+      row[7]?.toString() || ""         // Reason
+    ]);
+    
+    return createJsonResponse(formatted);
+    
+  } catch (error) {
+    console.error("History error:", error);
+    return createJsonResponse([]);
   }
-  return out;
+}
+
+/* ================= COMMANDS ================= */
+function handleGetCommand(deviceId) {
+  const props = PropertiesService.getScriptProperties();
+  let buzzer = props.getProperty("BUZZER_CMD") || "1";
+  
+  // Auto-reset after 10 minutes
+  const lastCmd = parseInt(props.getProperty("LAST_COMMAND_TIME") || "0");
+  if (Date.now() - lastCmd > 600000 && buzzer === "0") {
+    buzzer = "1";
+    props.setProperty("BUZZER_CMD", "1");
+  }
+  
+  return createJsonResponse({ buzzer: buzzer });
+}
+
+function handleCommand(buzzerState, source, deviceId) {
+  const props = PropertiesService.getScriptProperties();
+  props.setProperty("BUZZER_CMD", buzzerState);
+  props.setProperty("LAST_COMMAND_TIME", Date.now().toString());
+  
+  const action = buzzerState === "0" ? "MUTE" : "ENABLE";
+  
+  // Log command separately (no dedup needed here - commands are explicit user actions)
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    let sheet = ss.getSheetByName("CommandLogs");
+    if (!sheet) {
+      sheet = ss.insertSheet("CommandLogs");
+      sheet.appendRow(["Timestamp", "DateTime", "Action", "Source", "Device"]);
+    }
+    const time = Utilities.formatDate(new Date(), "Asia/Kolkata", "dd-MM-yyyy HH:mm:ss");
+    sheet.appendRow([Date.now(), time, action, source || "Dashboard", deviceId || "ALL"]);
+  } catch (e) {
+    console.error("Command log error:", e);
+  }
+  
+  return createTextResponse("SUCCESS");
+}
+
+/* ================= ALERTS ================= */
+function handleSmokeAlert(smoke, status, date, time, wifi, props) {
+  const wasActive = props.getProperty("SMOKE_ACTIVE") === "true";
+  const lastEmail = parseInt(props.getProperty("LAST_EMAIL_SENT") || "0");
+  const now = Date.now();
+  
+  if (status === 1 && !wasActive) {
+    // Smoke started
+    props.setProperty("SMOKE_ACTIVE", "true");
+    
+    // 5 minute cooldown
+    if (now - lastEmail > 300000) {
+      sendAlertEmail(smoke, date, time, wifi, props);
+      props.setProperty("LAST_EMAIL_SENT", now.toString());
+    }
+  }
+  
+  if (status === 0 && wasActive) {
+    // Smoke cleared
+    props.setProperty("SMOKE_ACTIVE", "false");
+  }
+}
+
+/* ================= SEND ALERT EMAIL (FIXED) ================= */
+function sendAlertEmail(smoke, date, time, wifi, props) {
+  try {
+    const recipient = props.getProperty("ALERT_EMAIL") || "adithybommanahalli@gmail.com";
+    const device = props.getProperty("DEVICE_ID") || "Unknown";
+    
+    const subject = ` Smoke Alert: Level ${smoke} | Disha International School`;
+    
+    const htmlBody = `
+    <div style="max-width:600px;margin:auto;
+            font-family:'Segoe UI',Tahoma,Arial,sans-serif;
+            border:1px solid #e5e0d8;">
+
+     <!-- LOGO -->
+     <div style="text-align:center;padding:18px 0 10px;">
+    <img src="https://yt3.googleusercontent.com/ytc/AIdro_ntQRMqw5Y5NJr8sYrg-0AP7veWJkCRf3fFJdcd2jcL=s900-c-k-c0x00ffffff-no-rj"
+         style="width:90px;height:90px;
+                border-radius:50%;
+                border:4px solid #d4af37;
+                background:#ffffff;" />
+    </div>
+
+    <!-- HEADER -->
+    <div style="background:#6b1f1f;padding:16px;text-align:center;">
+    <h2 style="margin:0;color:#d4af37;">Disha International School</h2>
+    <p style="margin:6px 0 0;color:#f3e8c9;font-size:14px;">
+      Shiggoan
+    </p>
+    </div>
+
+    <!-- BODY -->
+    <div style="padding:24px;color:#2c2c2c;">
+    <p>Dear Sir,</p>
+
+    <p>
+      This is an automated alert generated by the
+      <strong>Smoke Detection System</strong>
+      Create by Malatesh.B and Naveen K from 8th Alpha<strong>HOD Cabin</strong>.
+    </p>
+
+    <p style="color:#6b1f1f;font-weight:600;">
+      Smoke levels have exceeded the configured safety threshold.
+      Immediate attention is recommended.
+    </p>
+
+    <table style="width:100%;border-collapse:collapse;margin-top:18px;font-size:14px;">
+     
+      <tr>
+        <td style="padding:10px;border:1px solid #d8cfc2;background:#faf8f5;"><strong>Smoke Level</strong></td>
+        <td style="padding:10px;border:1px solid #d8cfc2;color:#d32f2f;font-weight:bold;font-size:16px;">${smoke}</td>
+      </tr>
+      <tr>
+        <td style="padding:10px;border:1px solid #d8cfc2;background:#faf8f5;"><strong>Date</strong></td>
+        <td style="padding:10px;border:1px solid #d8cfc2;">${date}</td>
+      </tr>
+      <tr>
+        <td style="padding:10px;border:1px solid #d8cfc2;background:#faf8f5;"><strong>Time</strong></td>
+        <td style="padding:10px;border:1px solid #d8cfc2;">${time}</td>
+      </tr>
+      <tr>
+        <td style="padding:10px;border:1px solid #d8cfc2;background:#faf8f5;"><strong>Network</strong></td>
+        <td style="padding:10px;border:1px solid #d8cfc2;">${wifi}</td>
+      </tr>
+      </table>
+
+    <p style="margin-top:20px;font-size:13px;color:#666;">
+      This notification has been generated automatically for safety monitoring.
+    </p>
+
+    <p style="margin-top:24px;">
+      Regards,<br>
+      <strong>Smoke Detection System</strong>
+      <span style="color:#6b1f1f;">Disha International School</span>
+    </p>
+    </div>
+
+    <!-- FOOTER -->
+    <div style="background:#6b1f1f;color:#f3e8c9;
+              text-align:center;font-size:12px;padding:12px;">
+     ©Disha International School| Automated Safety Alert System
+    </div>
+    </div>
+    `;
+
+    GmailApp.sendEmail(recipient, subject, "", {
+      htmlBody: htmlBody,
+      name: "Disha Smoke System",
+      replyTo: recipient
+    });
+    
+    console.log(`Email sent to ${recipient} | Smoke: ${smoke} | Time: ${time}`);
+    
+  } catch (e) {
+    console.error("Email send error:", e);
+  }
+}
+
+/* ================= HELPERS ================= */
+function createJsonResponse(data) {
+  return ContentService.createTextOutput(JSON.stringify(data))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function createTextResponse(text) {
+  return ContentService.createTextOutput(text)
+    .setMimeType(ContentService.MimeType.TEXT);
+}
+
+function createErrorResponse(error) {
+  return createJsonResponse({ error: error });
+}
+
+function handleHealthCheck() {
+  return createJsonResponse({ status: "online", version: "5.1" });
+}
+
+/* ================= INITIALIZATION (FIXED) ================= */
+function initializeSystem() {
+  const props = PropertiesService.getScriptProperties();
+  const now = new Date();
+  const timestamp = now.getTime();
+  
+  // Reset dedup tracking AND initialize NEXT_ID (CRITICAL FIX)
+  props.setProperties({
+    "LAST_EVENT_KEY": "INIT",
+    "LAST_EVENT_TIME": "0",
+    "NEXT_ID": "1",  // FIXED: Initialize sequential ID counter
+    "LATEST_SMOKE": "0",
+    "LATEST_STATUS": "0",
+    "LATEST_DATE": Utilities.formatDate(now, "Asia/Kolkata", "dd-MM-yyyy"),
+    "LATEST_TIME": Utilities.formatDate(now, "Asia/Kolkata", "HH:mm:ss"),
+    "LAST_UPDATE": timestamp.toString(),
+    "BUZZER_CMD": "1",
+    "LAST_COMMAND_TIME": "0",
+    "SMOKE_ACTIVE": "false",
+    "LAST_EMAIL_SENT": "0",
+    "ALERT_EMAIL": "syncbyadi@gmail.com",
+    "DEVICE_ONLINE": "false",
+    "DEVICE_ID": "UNKNOWN"
+  });
+  
+  // Setup Logs sheet (fresh start)
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let logsSheet = ss.getSheetByName("Logs");
+  if (logsSheet) ss.deleteSheet(logsSheet);
+  logsSheet = ss.insertSheet("Logs");
+  logsSheet.appendRow(["ID", "Smoke", "Status", "Date", "Time", "WiFi", "Device", "Reason", "ServerTime"]);
+  logsSheet.getRange(1, 1, 1, 9).setFontWeight("bold").setBackground("#4285f4").setFontColor("white");
+  
+  // Setup CommandLogs
+  let cmdSheet = ss.getSheetByName("CommandLogs");
+  if (cmdSheet) ss.deleteSheet(cmdSheet);
+  cmdSheet = ss.insertSheet("CommandLogs");
+  cmdSheet.appendRow(["Timestamp", "DateTime", "Action", "Source", "Device"]);
+  
+  console.log("✅ System v5.1 initialized: Sequential IDs, GMU Email Template");
 }
