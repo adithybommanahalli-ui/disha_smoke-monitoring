@@ -1420,6 +1420,7 @@ body {
   font-family: var(--font-main);
 
   background: 
+  
     url("./assets/college.jpeg");
 
   background-size: cover;        /* fills entire screen */
