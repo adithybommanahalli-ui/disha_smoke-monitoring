@@ -1506,3 +1506,17 @@ transform: translateY(0) scale(1);
     grid-template-columns: 1fr !important;
   }
 }
+/* ============================================
+   MOBILE: INCREASE SPACING BETWEEN CARDS
+   ============================================ */
+@media (max-width: 768px) {
+  .dashboard {
+    gap: 32px !important;   /* was 20px – now more breathing room */
+  }
+
+  /* Optional: add a little extra padding around the dashboard edges */
+  .dashboard {
+    padding-left: 20px !important;
+    padding-right: 20px !important;
+  }
+}
