@@ -1483,3 +1483,92 @@ transform: translateY(0) scale(1);
 }
 
 }
+/* ============================================
+   STACK FOOTER CARDS VERTICALLY (Description, Team, Contact)
+   ============================================ */
+.footer-container {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 30px !important;
+  max-width: 800px;               /* narrower width for better readability */
+  margin-left: auto !important;
+  margin-right: auto !important;
+  width: 100%;
+}
+
+.footer-section {
+  width: 100% !important;
+}
+
+/* Remove any leftover grid rules from earlier */
+@media (min-width: 769px) and (max-width: 1024px) {
+  .footer-container {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+/* ============================================
+   FIX RECENT EVENTS TABLE – FILL CARD & SCROLL
+   ============================================ */
+/* Make the last card (Recent Events) a flexible column */
+.dashboard .card:last-child {
+  display: flex !important;
+  flex-direction: column !important;
+  height: 100%;                /* take all available height */
+  overflow: hidden;            /* prevent content from spilling out */
+}
+
+/* The heading stays at the top */
+.dashboard .card:last-child h2 {
+  flex-shrink: 0;
+}
+
+/* The table container expands to fill remaining space */
+.dashboard .card:last-child .table-container {
+  flex: 1 1 auto !important;
+  min-height: 0;                /* required for inner scrolling */
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Make the table itself a flex column so it fills the container */
+.dashboard .card:last-child table {
+  width: 100% !important;
+  border-collapse: collapse !important;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+/* Keep thead as a table (no scroll) */
+.dashboard .card:last-child thead {
+  display: table;
+  width: 100%;
+  table-layout: fixed;          /* helps columns align with tbody */
+}
+
+/* Make tbody scrollable and take remaining height */
+.dashboard .card:last-child tbody {
+  display: block;
+  overflow-y: auto;
+  width: 100%;
+  flex: 1;
+  min-height: 0;
+}
+
+/* Rows inside tbody must behave like table rows for proper layout */
+.dashboard .card:last-child tbody tr {
+  display: table;
+  width: 100%;
+  table-layout: fixed;
+}
+
+/* Optional: consistent cell padding */
+.dashboard .card:last-child th,
+.dashboard .card:last-child td {
+  box-sizing: border-box;
+  padding: 12px;
+  text-align: left;
+}
