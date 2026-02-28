@@ -1506,69 +1506,88 @@ transform: translateY(0) scale(1);
     grid-template-columns: 1fr !important;
   }
 }
-
 /* ============================================
-   FIX RECENT EVENTS TABLE – FILL CARD & SCROLL
+   FINAL FIX: RECENT EVENTS TABLE (with wrapper)
    ============================================ */
-/* Make the last card (Recent Events) a flexible column */
-.dashboard .card:last-child {
+
+/* Ensure the dashboard stacks cards vertically */
+.dashboard {
   display: flex !important;
   flex-direction: column !important;
-  height: 100%;                /* take all available height */
-  overflow: hidden;            /* prevent content from spilling out */
+  min-height: 100vh;
+  gap: 28px;
+  padding: 40px 24px;
+  max-width: 1200px;
+  margin: 0 auto;
 }
 
-/* The heading stays at the top */
+/* Last card (Recent Events) takes all remaining space */
+.dashboard .card:last-child {
+  flex: 1 1 auto !important;
+  display: flex !important;
+  flex-direction: column !important;
+  overflow: hidden;               /* clip any overflow */
+  padding: 28px;                  /* keep original card padding */
+}
+
+/* Heading stays at the top */
 .dashboard .card:last-child h2 {
   flex-shrink: 0;
+  margin-bottom: 16px;            /* consistent with original design */
 }
 
-/* The table container expands to fill remaining space */
-.dashboard .card:last-child .table-container {
+/* The wrapper div (with overflow-x:auto) expands to fill the space */
+.dashboard .card:last-child > div[style*="overflow-x:auto"] {
   flex: 1 1 auto !important;
-  min-height: 0;                /* required for inner scrolling */
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
+  min-height: 0 !important;        /* essential for flex child to shrink */
+  display: flex !important;
+  flex-direction: column !important;
+  overflow: hidden;                /* let the table handle scrolling */
 }
 
-/* Make the table itself a flex column so it fills the container */
-.dashboard .card:last-child table {
+/* The table itself fills the wrapper */
+.dashboard .card:last-child #historyTable {
   width: 100% !important;
+  height: 100% !important;          /* take full height of wrapper */
+  display: flex !important;
+  flex-direction: column !important;
   border-collapse: collapse !important;
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  min-height: 0;
+  margin-top: 12px !important;      /* keep your inline margin, or remove if unwanted */
+  box-sizing: border-box !important;
 }
 
-/* Keep thead as a table (no scroll) */
-.dashboard .card:last-child thead {
-  display: table;
-  width: 100%;
-  table-layout: fixed;          /* helps columns align with tbody */
+/* Keep thead as a proper table (no scroll) */
+.dashboard .card:last-child #historyTable thead {
+  display: table !important;
+  width: 100% !important;
+  table-layout: fixed !important;
+  background: linear-gradient(135deg, var(--primary) 0%, var(--primary-light) 100%);
+  color: #ffffff;
 }
 
 /* Make tbody scrollable and take remaining height */
-.dashboard .card:last-child tbody {
-  display: block;
-  overflow-y: auto;
-  width: 100%;
-  flex: 1;
-  min-height: 0;
+.dashboard .card:last-child #historyTable tbody {
+  display: block !important;
+  overflow-y: auto !important;
+  width: 100% !important;
+  flex: 1 1 auto !important;        /* fill leftover vertical space */
+  min-height: 0 !important;         /* required for flex to shrink */
+  background: var(--bg-card);
 }
 
-/* Rows inside tbody must behave like table rows for proper layout */
-.dashboard .card:last-child tbody tr {
-  display: table;
-  width: 100%;
-  table-layout: fixed;
+/* Rows inside tbody behave like table rows for column alignment */
+.dashboard .card:last-child #historyTable tbody tr {
+  display: table !important;
+  width: 100% !important;
+  table-layout: fixed !important;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.1);
 }
 
-/* Optional: consistent cell padding */
-.dashboard .card:last-child th,
-.dashboard .card:last-child td {
-  box-sizing: border-box;
-  padding: 12px;
+/* Consistent cell padding */
+.dashboard .card:last-child #historyTable th,
+.dashboard .card:last-child #historyTable td {
+  padding: 12px 16px !important;
+  box-sizing: border-box !important;
   text-align: left;
+  vertical-align: middle;
 }
